@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maui Weather Forecast</title>
+  <style>
+    /* Styles for the weather table */
+    body {
+      font-family: sans-serif;
+    }
+    h2 {
+      text-align: center;
+    }
+    p {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #weatherTable {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid #ddd;
+      margin: 0 auto;
+    }
+    #weatherTable th, #weatherTable td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      text-align: center;
+    }
+    #weatherTable th {
+      background-color: #f2f2f2;
+    }
+    .safe {
+      background-color: #90EE90; /* Light green for safe conditions */
+      color: black;
+    }
+    .alert {
+      background-color: #FF0000; /* Red for alert conditions */
+      color: white;
+    }
+    .warning {
+      background-color: #FFA500; /* Orange for potential conditions */
+      color: black;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <h2>Maui County Wind and Precipitation Forecast</h2>
+  <p>Loading current weather data...</p>
+  <table id="weatherTable">
+    <thead>
+      <tr>
+        <th>Location</th>
+        <th>Wind Speed (mph)</th>
+        <th>Wind Gusts (mph)</th>
+        <th>Pot. >25mph Wind (%)</th>
+        <th>Precip. Chance (%)</th>
+        <th>View JSON</th>
+      </tr>
+    </thead>
+    <tbody>
+      </tbody>
+  </table>
+
+  <script>
+    // --- Configuration ---
+    const locations = [
+      { name: 'Makawao', latitude: 20.8203, longitude: -156.3338 }, // Approximate coordinates
+      { name: 'Kula', latitude: 20.7947, longitude: -156.3369 },
+      { name: 'Haiku', latitude: 20.9039, longitude: -156.3369 },
+      { name: 'Paia', latitude: 20.9136, longitude: -156.3767 },
+      { name: 'Kahului', latitude: 20.8947, longitude: -156.4722 },
+      { name: 'Wailuku', latitude: 20.8964, longitude: -156.5000 },
+      { name: 'Kihei', latitude: 20.7622, longitude: -156.4575 },
+      { name: 'Wailea', latitude: 20.6975, longitude: -156.4353 },
+      { name: 'Lahaina', latitude: 20.8783, longitude: -156.6725 },
+      { name: 'Kapalua', latitude: 20.9658, longitude: -156.6833 },
+    ];
+
+    const weatherTableBody = document.querySelector('#weatherTable tbody');
+    const loadingMessage = document.querySelector('p');
+
+    // Function to fetch weather data for a single location
+    async function getWeatherData(location) {
+      try {
+        // 1. Get the nearest weather station ID and URLs.
+        const stationUrl = `https://api.weather.gov/points/${location.latitude},${location.longitude}`;
+        const stationResponse = await fetch(stationUrl);
+
+        if (!stationResponse.ok) {
+          console.error(`Error fetching station data for ${location.name}: ${stationResponse.status} - ${stationResponse.statusText}`);
+          return { name: location.name, error: 'Error fetching station data' };
+        }
+
+        const stationData = await stationResponse.json();
+        const forecastHourlyUrl = stationData.properties.forecastHourly;
+        const forecastWindGustUrl = stationData.properties.forecast;
+
+        // 2. Get the hourly forecast for wind speed and gusts.
+        const hourlyForecastResponse = await fetch(forecastHourlyUrl);
+        if (!hourlyForecastResponse.ok) {
+          console.error(`Error fetching hourly forecast data for ${location.name}: ${hourlyForecastResponse.status} - ${hourlyForecastResponse.statusText}`);
+          return { name: location.name, error: 'Error fetching hourly forecast data' };
+        }
+        const hourlyForecastData = await hourlyForecastResponse.json();
+
+        // 3. Get the detailed forecast for potential 25+ mph winds.
+        const detailedForecastResponse = await fetch(forecastWindGustUrl);
+        let potentialHighWindChance = 'N/A';
+        if (!detailedForecastResponse.ok) {
+          console.warn(`Error fetching detailed forecast data for ${location.name}: ${detailedForecastResponse.status} - ${detailedForecastResponse.statusText}. Potential wind data might be unavailable.`);
+        } else {
+          const detailedForecastData = await detailedForecastResponse.json();
+          potentialHighWindChance = getPotentialHighWindChance(detailedForecastData);
+        }
+
+        let windSpeed = 'N/A';
+        let windGusts = 'N/A';
+        let precipitationChance = 'N/A';
+
+        if (hourlyForecastData.properties && hourlyForecastData.properties.periods && hourlyForecastData.properties.periods.length > 0) {
+          // Get current date in HST
+          const now = new Date();
+          const hawaiiTimeOffset = -10 * 60; // HST is UTC-10 in minutes
+          const nowInHawaii = new Date(now.getTime() + hawaiiTimeOffset * 60 * 1000);
+
+          let closestPeriod = null;
+          let minDifference = Infinity;
+
+          hourlyForecastData.properties.periods.forEach(period => {
+            const periodStart = new Date(period.startTime);
+            const periodEnd = new Date(period.endTime);
+
+            // Check if the current time falls within this period
+            if (nowInHawaii >= periodStart && nowInHawaii < periodEnd) {
+              closestPeriod = period;
+            } else {
+              // If not in the current period, find the closest future period
+              const differenceStart = Math.abs(periodStart.getTime() - nowInHawaii.getTime());
+              if (differenceStart < minDifference && periodStart > nowInHawaii) {
+                minDifference = differenceStart;
+                closestPeriod = period;
+              }
+            }
+          });
+
+          if (closestPeriod) {
+            windSpeed = closestPeriod.windSpeed ? closestPeriod.windSpeed.match(/\d+/g)?.[0] || 'N/A' : 'N/A'; // Extract number
+            windGusts = closestPeriod.windGust ? closestPeriod.windGust.match(/\d+/g)?.[0] || 'N/A' : 'N/A';
+            precipitationChance = closestPeriod.probabilityOfPrecipitation ? closestPeriod.probabilityOfPrecipitation.value : 'N/A';
+          }
+        }
+
+        return {
+          name: location.name,
+          windSpeed: windSpeed,
+          windGusts: windGusts,
+          potentialHighWindChance: potentialHighWindChance,
+          precipitationChance: precipitationChance,
+          hourlyForecastUrl: forecastHourlyUrl, // Store the URL
+          detailedForecastUrl: forecastWindGustUrl, // Store the URL
+        };
+
+      } catch (error) {
+        console.error(`Error processing ${location.name}:`, error);
+        return { name: location.name, error: 'An unexpected error occurred' };
+      }
+    }
+
+    // Function to extract the probability of potential 25+ mph winds for the relevant period
+    function getPotentialHighWindChance(forecastData) {
+      if (!forecastData || !forecastData.properties || !forecastData.properties.periods) {
+        return 'N/A';
+      }
+
+      const now = new Date();
+      const hawaiiTimeOffset = -10 * 60; // HST is UTC-10 in minutes
+      const nowInHawaii = new Date(now.getTime() + hawaiiTimeOffset * 60 * 1000);
+      let closestPeriod = null;
+      let minDifference = Infinity;
+
+      forecastData.properties.periods.forEach(period => {
+        const periodStart = new Date(period.startTime);
+        const periodEnd = new Date(period.endTime);
+
+        if (nowInHawaii >= periodStart && nowInHawaii < periodEnd) {
+          closestPeriod = period;
+        } else {
+          const differenceStart = Math.abs(periodStart.getTime() - nowInHawaii.getTime());
+          if (differenceStart < minDifference && periodStart > nowInHawaii) {
+            minDifference = differenceStart;
+            closestPeriod = period;
+          }
+        }
+      });
+
+      if (closestPeriod && closestPeriod.detailedForecast) {
+        const highWindMatch = closestPeriod.detailedForecast.match(/chance of winds greater than 25 mph is (\d+)%/i);
+        if (highWindMatch && highWindMatch[1]) {
+          return parseInt(highWindMatch[1]);
+        } else {
+          const potentialMatch = closestPeriod.detailedForecast.match(/potential for winds greater than 25 mph/i);
+          return potentialMatch ? 'Likely' : 'N/A';
+        }
+      }
+      return 'N/A';
+    }
+
+    // Function to display the weather data in the table
+    function displayWeatherData(weatherData) {
+      weatherTableBody.innerHTML = ''; // Clear any existing data
+
+      weatherData.forEach(data => {
+        const row = weatherTableBody.insertRow();
+
+        const nameCell = row.insertCell();
+        nameCell.textContent = data.name;
+
+        const windSpeedCell = row.insertCell();
+        const windGustsCell = row.insertCell();
+        const potentialWindCell = row.insertCell();
+        const precipitationCell = row.insertCell();
+        const jsonLinkCell = row.insertCell(); // New cell for the JSON link
+
+        if (data.error) {
+          windSpeedCell.colSpan = 5;
+          windSpeedCell.textContent = data.error;
+          windSpeedCell.classList.add('error');
+        } else {
+          windSpeedCell.textContent = data.windSpeed;
+          windGustsCell.textContent = data.windGusts;
+          potentialWindCell.textContent = typeof data.potentialHighWindChance === 'number' ? `${data.potentialHighWindChance}%` : data.potentialHighWindChance;
+          precipitationCell.textContent = data.precipitationChance !== 'N/A' ? `${data.precipitationChance}%` : 'N/A';
+
+          // Create a link to view the hourly forecast JSON
+          const hourlyLink = document.createElement('a');
+          hourlyLink.href = data.hourlyForecastUrl;
+          hourlyLink.textContent = 'Hourly JSON';
+          hourlyLink.target = '_blank'; // Open in a new tab
+
+          // Optionally, create a link to the detailed forecast JSON as well
+          const detailedLink = document.createElement('a');
+          detailedLink.href = data.detailedForecastUrl;
+          detailedLink.textContent = 'Detailed JSON';
+          detailedLink.target = '_blank';
+          detailedLink.style.marginLeft = '5px'; // Add some spacing
+
+          jsonLinkCell.appendChild(hourlyLink);
+          if (data.detailedForecastUrl) {
+            jsonLinkCell.appendChild(detailedLink);
+          }
+
+          // Apply styling based on wind speed, gusts, and precipitation chance
+          windSpeedCell.className = (data.windSpeed < 25 && data.windSpeed !== 'N/A') ? 'safe' : (data.windSpeed >= 25 ? 'alert' : '');
+          windGustsCell.className = (data.windGusts < 25 && data.windGusts !== 'N/A') ? 'safe' : (data.windGusts >= 25 ? 'alert' : '');
+          potentialWindCell.className = (typeof data.potentialHighWindChance === 'number' && data.potentialHighWindChance > 50) ? 'warning' : (data.potentialHighWindChance === 'Likely' ? 'warning' : '');
+          precipitationCell.className = (data.precipitationChance > 50 && data.precipitationChance !== 'N/A') ? 'alert' : 'safe';
+        }
+      });
+
+      loadingMessage.textContent = `Weather data updated at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'Pacific/Honolulu' })} HST`;
+    }
+
+    // Fetch weather data for all locations when the page loads
+    async function fetchAllWeatherData() {
+      const allWeatherData = await Promise.all(locations.map(location => getWeatherData(location)));
+      displayWeatherData(allWeatherData);
+    }
+
+    // Call the function to fetch and display data on page load
+    fetchAllWeatherData();
+  </script>
+</body>
+</html>
